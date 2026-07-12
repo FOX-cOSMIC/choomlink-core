@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "cyberverse-bot-harness",
+  "version-string": "1.0",
+  "description": "Headless fake-client harness that speaks the Cyberverse server protocol for sync/load testing",
+  "builtin-baseline": "f87344cac03158cbf1467264565f1fd36b382a24",
+  "dependencies": [ "gamenetworkingsockets" ]
+}
