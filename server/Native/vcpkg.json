@@ -3,5 +3,6 @@
   "name": "gamenetworkingsockets-vcpkg-example",
   "version-string": "1.0",
   "description": "Example app that uses vcpkg to declare dependencies and fetch gamenetworkingsockets",
+  "builtin-baseline": "f87344cac03158cbf1467264565f1fd36b382a24",
   "dependencies": [ "gamenetworkingsockets" ]
 }
