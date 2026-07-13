@@ -34,6 +34,7 @@ struct Options
     Vector3 center = { -2102.0f, 446.0f, 36.0f }; // verified Stage-A player position
     float hz = 10.0f;
     float jumpEvery = 0.0f; // seconds between jump actions per bot; 0 = never
+    float boundaryDistance = 440.0f; // oscillation center distance for the boundary pattern
 };
 
 bool ParseArgs(const int argc, char** argv, Options& options)
@@ -80,9 +81,13 @@ bool ParseArgs(const int argc, char** argv, Options& options)
             {
                 options.pattern = Behavior::Pattern::Random;
             }
+            else if (std::strcmp(value, "boundary") == 0)
+            {
+                options.pattern = Behavior::Pattern::Boundary;
+            }
             else
             {
-                std::fprintf(stderr, "unknown pattern \"%s\" (circle|random)\n", value);
+                std::fprintf(stderr, "unknown pattern \"%s\" (circle|random|boundary)\n", value);
                 return false;
             }
         }
@@ -108,12 +113,18 @@ bool ParseArgs(const int argc, char** argv, Options& options)
             if (!value) return false;
             options.jumpEvery = static_cast<float>(std::atof(value));
         }
+        else if (arg == "--distance")
+        {
+            const auto value = next();
+            if (!value) return false;
+            options.boundaryDistance = static_cast<float>(std::atof(value));
+        }
         else
         {
             std::fprintf(stderr,
                          "usage: bot-harness [--server 127.0.0.1] [--port 1337] [--count 8]\n"
-                         "                   [--pattern circle|random] [--center x,y,z] [--hz 10]\n"
-                         "                   [--jump-every <seconds>]\n");
+                         "                   [--pattern circle|random|boundary] [--center x,y,z] [--hz 10]\n"
+                         "                   [--jump-every <seconds>] [--distance <m, boundary pattern>]\n");
             return false;
         }
     }
@@ -169,7 +180,8 @@ int main(const int argc, char** argv)
     std::vector<std::unique_ptr<BotClient>> bots;
     for (int i = 0; i < options.count; i++)
     {
-        auto bot = std::make_unique<BotClient>(i, iface, Behavior(options.pattern, options.center, i));
+        auto bot = std::make_unique<BotClient>(i, iface,
+                                               Behavior(options.pattern, options.center, i, options.boundaryDistance));
         bot->Connect(address);
         bots.push_back(std::move(bot));
     }
@@ -221,17 +233,20 @@ int main(const int argc, char** argv)
             statsAccumulator = 0.0f;
 
             int running = 0, dead = 0;
-            uint64_t teleports = 0, actions = 0;
+            uint64_t teleports = 0, actions = 0, spawns = 0, despawns = 0;
             for (const auto& bot : bots)
             {
                 if (bot->GetState() == BotClient::State::Running) running++;
                 if (bot->GetState() == BotClient::State::Dead) dead++;
                 teleports += bot->ConsumeTeleportCount();
                 actions += bot->ConsumeActionCount();
+                spawns += bot->ConsumeSpawnCount();
+                despawns += bot->ConsumeDespawnCount();
             }
-            std::printf("stats: %d/%zu running, %d dead, %llu teleports, %llu actions received/s\n", running,
-                        bots.size(), dead, static_cast<unsigned long long>(teleports),
-                        static_cast<unsigned long long>(actions));
+            std::printf("stats: %d/%zu running, %d dead, %llu teleports, %llu actions, %llu spawns, %llu despawns received/s\n",
+                        running, bots.size(), dead, static_cast<unsigned long long>(teleports),
+                        static_cast<unsigned long long>(actions), static_cast<unsigned long long>(spawns),
+                        static_cast<unsigned long long>(despawns));
 
             if (dead == static_cast<int>(bots.size()))
             {

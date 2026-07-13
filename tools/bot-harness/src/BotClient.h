@@ -52,6 +52,18 @@ public:
         m_actionsReceived = 0;
         return count;
     }
+    uint64_t ConsumeSpawnCount()
+    {
+        const auto count = m_spawnsReceived;
+        m_spawnsReceived = 0;
+        return count;
+    }
+    uint64_t ConsumeDespawnCount()
+    {
+        const auto count = m_despawnsReceived;
+        m_despawnsReceived = 0;
+        return count;
+    }
 
     // GNS delivers status changes through a single static callback; dispatch by handle.
     static void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t* info);
@@ -94,6 +106,8 @@ private:
     Pose m_lastPose {};
     uint64_t m_teleportsReceived = 0;
     uint64_t m_actionsReceived = 0;
+    uint64_t m_spawnsReceived = 0;
+    uint64_t m_despawnsReceived = 0;
 
     static std::unordered_map<HSteamNetConnection, BotClient*> s_byConnection;
 };

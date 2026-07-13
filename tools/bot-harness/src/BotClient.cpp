@@ -158,6 +158,7 @@ void BotClient::HandleMessage(const void* data, const size_t size)
             std::fprintf(stderr, "[%s] faulty packet: SpawnEntity\n", m_name.c_str());
             return;
         }
+        m_spawnsReceived++;
         std::printf("[%s] peer entity spawned: networkId %llu (record %llu) at (%.1f, %.1f, %.1f)\n", m_name.c_str(),
                     static_cast<unsigned long long>(spawn.networkedEntityId),
                     static_cast<unsigned long long>(spawn.recordId), spawn.spawnPosition.x, spawn.spawnPosition.y,
@@ -198,6 +199,7 @@ void BotClient::HandleMessage(const void* data, const size_t size)
             std::fprintf(stderr, "[%s] faulty packet: DestroyEntity\n", m_name.c_str());
             return;
         }
+        m_despawnsReceived++;
         std::printf("[%s] peer entity destroyed: networkId %llu\n", m_name.c_str(),
                     static_cast<unsigned long long>(destroy.networkedEntityId));
     }

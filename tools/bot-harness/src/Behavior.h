@@ -20,16 +20,28 @@ public:
     {
         Circle,
         Random,
+        Boundary,
     };
 
-    Behavior(const Pattern pattern, const Vector3 center, const int botIndex)
+    Behavior(const Pattern pattern, const Vector3 center, const int botIndex, const float boundaryDistance = 440.0f)
         : m_pattern(pattern), m_center(center),
           m_radius(5.0f + static_cast<float>(botIndex)),
           // distribute bots around the circle / center so they don't spawn inside each other
           m_angle(static_cast<float>(botIndex) * 0.7f),
+          m_boundaryDistance(boundaryDistance),
           m_rng(1337 + botIndex)
     {
-        m_position = PositionOnCircle();
+        if (pattern == Pattern::Boundary)
+        {
+            // Spawn ON the oscillation distance — spawning near the center first would let the
+            // server track us before we move out, corrupting the spawn/despawn counters.
+            m_position = { m_center.x + m_boundaryDistance * std::cos(m_angle),
+                           m_center.y + m_boundaryDistance * std::sin(m_angle), m_center.z };
+        }
+        else
+        {
+            m_position = PositionOnCircle();
+        }
         m_heading = m_angle;
     }
 
@@ -44,6 +56,8 @@ public:
         {
         case Pattern::Circle:
             return TickCircle(dt);
+        case Pattern::Boundary:
+            return TickBoundary(dt);
         case Pattern::Random:
         default:
             return TickRandom(dt);
@@ -92,10 +106,25 @@ private:
         return { m_position, std::fmod(m_heading * 57.29578f, 360.0f) };
     }
 
+    // Oscillates radially between boundaryDistance-22.5 and boundaryDistance+22.5 around the
+    // center — with the default 440 +/- 22.5 that is 417.5..462.5, i.e. crossing the enter
+    // radius (425) but never the exit radius (470): the server must spawn us once at the
+    // observer and never despawn (hysteresis verification).
+    Pose TickBoundary(const float dt)
+    {
+        m_boundaryPhase += (WALK_SPEED / 22.5f) * dt;
+        const float dist = m_boundaryDistance + 22.5f * std::sin(m_boundaryPhase);
+        m_position = { m_center.x + dist * std::cos(m_angle), m_center.y + dist * std::sin(m_angle), m_center.z };
+        const float yaw = (m_angle + (std::cos(m_boundaryPhase) >= 0.0f ? 0.0f : 3.1415927f)) * 57.29578f;
+        return { m_position, std::fmod(yaw, 360.0f) };
+    }
+
     Pattern m_pattern;
     Vector3 m_center;
     float m_radius;
     float m_angle;
+    float m_boundaryDistance;
+    float m_boundaryPhase = 0.0f;
     Vector3 m_position {};
     float m_heading = 0.0f;
     float m_timeToNewHeading = 0.0f;
