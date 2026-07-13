@@ -31,16 +31,20 @@ private:
     bool m_gameRestored = false;
     std::map<uint64_t, RED4ext::ent::EntityID> m_networkedEntitiesLookup;
 
-    // Per-remote-puppet movement bookkeeping (locomotion sync). Each remote puppet gets an
-    // invisible proxy entity that we teleport to every network position; the puppet follows
-    // it via ONE long-lived AIFollowTargetCommand — the engine's native mechanism for
-    // following a moving target (gait adaptation, stop hysteresis included).
+    // Per-remote-puppet movement bookkeeping (locomotion sync, AI-free): each network update
+    // stores only the target pose + the velocity derived from the update interval; a per-frame
+    // interpolation moves the puppet kinematically and the locomotion blendgraph is fed the
+    // same feature data it normally receives from the movement AI (inputs "locomotion" and
+    // "crowd_locomotion", verified against the humanoid.animgraph asset).
     struct MovementState
     {
-        RED4ext::ent::EntityID proxyId {};
-        bool proxyRequested = false;
-        bool followIssued = false;
-        RED4ext::Handle<RED4ext::AICommand> followCommand;
+        RED4ext::Vector4 targetPosition {};
+        float targetYaw = 0.0f;
+        RED4ext::Vector4 velocity {};    // world units/s toward target
+        float speed = 0.0f;              // m/s magnitude, feeds the anim graph
+        float timeSinceUpdate = 0.0f;    // accumulated frame dt since the last packet
+        bool hasTarget = false;
+        bool idleApplied = false;        // idle anim feed sent since arrival (send once)
     };
     std::map<RED4ext::ent::EntityID, MovementState> m_movementState;
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
@@ -55,6 +59,8 @@ private:
     static void ConnectionStatusChangedCallback(SteamNetConnectionStatusChangedCallback_t* pInfo);
     void OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue);
     void SetEntityPosition(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
+    void UpdatePuppetInterpolation(float deltaTime);
+    void DriveLocomotionFeed(const Red::Handle<Red::Entity>& entity, const MovementState& state);
 
 protected:
     void PollIncomingMessages();

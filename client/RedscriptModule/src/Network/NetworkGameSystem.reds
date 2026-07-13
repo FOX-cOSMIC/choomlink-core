@@ -89,72 +89,16 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
-    // Invisible proxy entity for locomotion sync: the remote puppet FOLLOWS this proxy via a
-    // single long-lived AIFollowTargetCommand (the engine's native moving-target mechanism);
-    // we only teleport the proxy to each incoming network position.
-    // Invisibility trick: a nonexistent appearanceName renders the entity invisible (community-
-    // documented). TODO(sustainable asset): replace with a minimal custom .ent proxy template
-    // once we ship our own archive — same interface, lighter entity.
-    public func CreateMovementProxy(position: Vector4) -> EntityID {
-        let spec = new DynamicEntitySpec();
-        spec.recordID = t"Character.Judy";
-        spec.appearanceName = n"choomlink_invisible_proxy";
-        spec.alwaysSpawned = true;
-        spec.position = position;
-        spec.persistState = false;
-        spec.persistSpawn = false;
-        spec.tags = [n"ChoomLinkProxy"];
-        return GameInstance.GetDynamicEntitySystem().CreateEntity(spec);
-    }
-
-    public func MoveProxy(proxy: ref<Entity>, position: Vector4, yaw: Float) {
-        let go = proxy as GameObject;
+    // Kinematic per-frame move for remote puppets (AI-free locomotion, phase 4b): the C++
+    // interpolation calls this every frame with the next position on the network path.
+    public func KinematicMove(entity: ref<Entity>, position: Vector4, yaw: Float) {
+        let go = entity as GameObject;
         if !IsDefined(go) {
             return;
         }
         let angles: EulerAngles;
         angles.Yaw = yaw;
         GameInstance.GetTeleportationFacility(go.GetGame()).Teleport(go, position, angles);
-    }
-
-    // One command, indefinite engine-native follow (same recipe AMM's companion system uses):
-    // matchSpeed adapts walk/run/sprint from the distance to the target, tolerance gives the
-    // stop dead-zone, stopWhenDestinationReached=false keeps it running forever.
-    public func StartFollowingProxy(entity: ref<Entity>, proxy: ref<Entity>) -> ref<AICommand> {
-        let puppet = entity as ScriptedPuppet;
-        let target = proxy as GameObject;
-        if !IsDefined(puppet) || !IsDefined(target) {
-            return null;
-        }
-
-        // The proxy must never collide with the world, traffic or players.
-        let proxyPuppet = proxy as ScriptedPuppet;
-        if IsDefined(proxyPuppet) {
-            let proxyAi = proxyPuppet.GetAIControllerComponent();
-            if IsDefined(proxyAi) {
-                proxyAi.DisableCollider();
-            }
-        }
-
-        let ai = puppet.GetAIControllerComponent();
-        if !IsDefined(ai) {
-            return null;
-        }
-
-        let command = new AIFollowTargetCommand();
-        command.target = target;
-        command.desiredDistance = 0.5;
-        command.tolerance = 1.0;
-        command.stopWhenDestinationReached = false;
-        command.movementType = moveMovementType.Walk;
-        command.matchSpeed = true;
-        command.teleport = false; // desync catch-up is handled by our own 8 m teleport rule
-        command.lookAtTarget = target;
-        command.removeAfterCombat = false;
-        command.ignoreInCombat = true;
-
-        ai.SendCommand(command);
-        return command;
     }
 
     // Relayed remote-player actions (EntityAction packet). Unknown actions are ignored on
@@ -175,6 +119,7 @@ public native class NetworkGameSystem extends IGameSystem {
         AnimationControllerComponent.PushEvent(puppet, n"Jump");
         FTLog(s"[ChoomLink] remote jump for puppet \(EntityID.GetHash(puppet.GetEntityID()))");
     }
+
 }
 
 @addMethod(GameInstance)

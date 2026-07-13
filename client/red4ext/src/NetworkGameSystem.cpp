@@ -14,6 +14,10 @@
 #include <steam/isteamnetworkingutils.h> // Required, see https://github.com/ValveSoftware/GameNetworkingSockets/issues/171^
 #include <steam/steamnetworkingsockets.h>
 
+#include "RED4ext/Scripting/Natives/Generated/anim/AnimFeature_CrowdLocomotion.hpp"
+#include "RED4ext/Scripting/Natives/Generated/anim/AnimFeature_Locomotion.hpp"
+#include "RED4ext/Scripting/Natives/Generated/ent/AnimInputSetterAnimFeature.hpp"
+
 #include "serverbound/AuthPacketsServerBound.h"
 #include "serverbound/WorldPacketsServerBound.h"
 #include "clientbound/AuthPacketsClientBound.h"
@@ -21,6 +25,7 @@
 
 #include <zpp_bits.h>
 
+#include <algorithm>
 #include <cmath>
 
 bool NetworkGameSystem::Load()
@@ -108,6 +113,7 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
     }
 
     PollIncomingMessages();
+    UpdatePuppetInterpolation(frame_info.deltaTime);
     TrackPlayerPosition(frame_info.deltaTime);
 
     m_pInterface->RunCallbacks(); // This shall be called in a loop.
@@ -216,6 +222,103 @@ void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId,
     }
 }
 
+void NetworkGameSystem::UpdatePuppetInterpolation(const float deltaTime)
+{
+    for (auto& [entityId, state] : m_movementState)
+    {
+        state.timeSinceUpdate += deltaTime;
+        if (!state.hasTarget)
+        {
+            continue;
+        }
+
+        const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
+        if (!entity.has_value())
+        {
+            continue;
+        }
+
+        const auto pos = Cyberverse::Utils::Entity_GetWorldPosition(entity.value());
+        const float remX = state.targetPosition.X - pos.X;
+        const float remY = state.targetPosition.Y - pos.Y;
+        const float remZ = state.targetPosition.Z - pos.Z;
+        const float remaining = std::sqrt(remX * remX + remY * remY + remZ * remZ);
+
+        if (remaining < 0.02f || state.speed <= 0.01f)
+        {
+            if (!state.idleApplied)
+            {
+                state.speed = 0.0f;
+                DriveLocomotionFeed(entity.value(), state); // blend to idle, once
+                state.idleApplied = true;
+            }
+            continue;
+        }
+
+        float step = state.speed * deltaTime;
+        if (step > remaining)
+        {
+            step = remaining; // never overshoot the last known target
+        }
+
+        const RED4ext::Vector4 newPos = { pos.X + remX / remaining * step,
+                                          pos.Y + remY / remaining * step,
+                                          pos.Z + remZ / remaining * step, 1.0f };
+        Red::CallVirtual(this, "KinematicMove", entity.value(), newPos, state.targetYaw);
+    }
+}
+
+void NetworkGameSystem::DriveLocomotionFeed(const Red::Handle<Red::Entity>& entity, const MovementState& state)
+{
+    // Both feature classes are native-only (not script-exposed); we build them here and queue
+    // the same AnimInputSetterAnimFeature event the game's redscript ApplyFeature helper
+    // queues. Input names and classes verified against base\gameplay\anim_graphs\humanoid
+    // .animgraph: "locomotion" <- animAnimFeature_Locomotion (action = Locomotion_AnimType),
+    // "crowd_locomotion" <- animAnimFeature_CrowdLocomotion (plain speed, crowd walk cycles).
+    int32_t action = 1; // Locomotion_AnimType.idle_stand
+    if (state.speed > 6.0f)
+    {
+        action = 13; // sprint_0
+    }
+    else if (state.speed > 2.5f)
+    {
+        action = 10; // jog_0
+    }
+    else if (state.speed > 0.1f)
+    {
+        action = 7; // walk_0
+    }
+
+    auto locoFeature = Red::MakeScriptedHandle<RED4ext::anim::AnimFeature_Locomotion>("animAnimFeature_Locomotion");
+    if (locoFeature)
+    {
+        locoFeature->action = action;
+        locoFeature->speedProgress = state.speed > 0.01f ? 1.0f : 0.0f;
+        auto locoEvt = Red::MakeScriptedHandle<RED4ext::ent::AnimInputSetterAnimFeature>("entAnimInputSetterAnimFeature");
+        if (locoEvt)
+        {
+            locoEvt->key = "locomotion";
+            locoEvt->delay = 0.0f;
+            locoEvt->value = locoFeature;
+            Red::CallVirtual(entity, "QueueEvent", locoEvt);
+        }
+    }
+
+    auto crowdFeature = Red::MakeScriptedHandle<RED4ext::anim::AnimFeature_CrowdLocomotion>("animAnimFeature_CrowdLocomotion");
+    if (crowdFeature)
+    {
+        crowdFeature->speed = state.speed;
+        crowdFeature->isCrowd = true;
+        auto crowdEvt = Red::MakeScriptedHandle<RED4ext::ent::AnimInputSetterAnimFeature>("entAnimInputSetterAnimFeature");
+        if (crowdEvt)
+        {
+            crowdEvt->key = "crowd_locomotion";
+            crowdEvt->delay = 0.0f;
+            crowdEvt->value = crowdFeature;
+            Red::CallVirtual(entity, "QueueEvent", crowdEvt);
+        }
+    }
+}
 
 void NetworkGameSystem::PollIncomingMessages()
 {
@@ -372,9 +475,9 @@ void NetworkGameSystem::PollIncomingMessages()
                 break;
             }
 
-            // Locomotion sync (engine-native): the puppet follows an invisible proxy entity via
-            // ONE long-lived AIFollowTargetCommand (matchSpeed adapts walk/run/sprint natively);
-            // per network update we only teleport the proxy to the sender's latest position.
+            // Locomotion sync (AI-free): store the new target pose; velocity from the update
+            // interval scales automatically with the falloff tier (10 Hz near, 2 Hz far).
+            // A per-frame interpolation (UpdatePuppetInterpolation) moves the puppet.
             auto& moveState = m_movementState[entityId];
 
             const auto lagX = teleport.targetPosition.x - positionSource.X;
@@ -382,42 +485,38 @@ void NetworkGameSystem::PollIncomingMessages()
             const auto lagZ = teleport.targetPosition.z - positionSource.Z;
             const auto puppetLag = std::sqrt(lagX * lagX + lagY * lagY + lagZ * lagZ);
 
-            if (!moveState.proxyRequested)
-            {
-                RED4ext::ent::EntityID proxyId = {};
-                Red::CallVirtual(this, "CreateMovementProxy", proxyId, worldPosition);
-                moveState.proxyId = proxyId;
-                moveState.proxyRequested = true;
-                break; // spawning is async; the follow command starts once the proxy resolves
-            }
-
-            const auto proxy = Cyberverse::Utils::GetDynamicEntity(moveState.proxyId);
-            if (!proxy.has_value())
-            {
-                break; // still spawning — retried on the next position update
-            }
-
-            Red::CallVirtual(this, "MoveProxy", proxy.value(), worldPosition, teleport.yaw);
-
             if (puppetLag > 8.0f)
             {
-                // Desync / spawn placement / vehicle exit: hard-teleport the puppet to catch up;
-                // the follow command keeps running and resumes from the new spot.
+                // Desync / spawn placement / vehicle exit: hard-teleport to catch up.
                 SDK->logger->TraceF(PLUGIN, "Entity %llu is %f m off target, teleport catch-up", teleport.networkedEntityId, puppetLag);
                 SetEntityPosition(entityId, worldPosition, teleport.yaw);
+                moveState.targetPosition = worldPosition;
+                moveState.targetYaw = teleport.yaw;
+                moveState.velocity = {};
+                moveState.speed = 0.0f;
+                moveState.timeSinceUpdate = 0.0f;
+                moveState.hasTarget = true;
+                moveState.idleApplied = false;
                 break;
             }
 
-            if (!moveState.followIssued)
+            if (moveState.hasTarget)
             {
-                RED4ext::Handle<RED4ext::AICommand> commandRef;
-                Red::CallVirtual(this, "StartFollowingProxy", commandRef, entity.value(), proxy.value());
-                if (commandRef)
-                {
-                    moveState.followCommand = commandRef;
-                    moveState.followIssued = true;
-                }
+                const float interval = std::clamp(moveState.timeSinceUpdate, 0.05f, 1.0f);
+                const float dX = worldPosition.X - moveState.targetPosition.X;
+                const float dY = worldPosition.Y - moveState.targetPosition.Y;
+                const float dZ = worldPosition.Z - moveState.targetPosition.Z;
+                moveState.velocity = { dX / interval, dY / interval, dZ / interval, 0.0f };
+                moveState.speed = std::sqrt(dX * dX + dY * dY + dZ * dZ) / interval;
             }
+
+            moveState.targetPosition = worldPosition;
+            moveState.targetYaw = teleport.yaw;
+            moveState.timeSinceUpdate = 0.0f;
+            moveState.hasTarget = true;
+            moveState.idleApplied = false;
+
+            DriveLocomotionFeed(entity.value(), moveState);
         }
         break;
 
@@ -471,15 +570,7 @@ void NetworkGameSystem::PollIncomingMessages()
                 SDK->logger->Warn(PLUGIN, "Failed to destroy entity!");
             }
 
-            // The movement proxy is ours, not the server's — clean it up with its puppet.
-            if (const auto it = m_movementState.find(entityId); it != m_movementState.end())
-            {
-                if (it->second.proxyRequested)
-                {
-                    Red::CallVirtual(this, "DestroyTransientEntity", it->second.proxyId);
-                }
-                m_movementState.erase(it);
-            }
+            m_movementState.erase(entityId);
             m_networkedEntitiesLookup.erase(entityId);
         }
         break;
