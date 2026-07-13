@@ -16,6 +16,8 @@ class PlayerActionTracker final : public Red::IScriptable
 {
 public:
     void RecordPlayerAction(RED4ext::CName actionName, RED4ext::gameinputActionType actionType, float value);
+    /// Called from the JumpEvents.OnEnter wrap — fires on the actual locomotion jump, not the button.
+    void TrackJump();
     void OnShoot(RED4ext::Handle<RED4ext::gameprojectileShootEvent> event);
     void OnHit(RED4ext::Handle<RED4ext::GameObject> gameObject, RED4ext::Handle<RED4ext::gameHitEvent> event);
     void OnMounting(RED4ext::Handle<RED4ext::game::mounting::MountingEvent> event);
@@ -29,6 +31,7 @@ private:
 
 RTTI_DEFINE_CLASS(PlayerActionTracker, {
     RTTI_METHOD(RecordPlayerAction);
+    RTTI_METHOD(TrackJump);
     RTTI_METHOD(OnShoot);
     RTTI_METHOD(OnHit);
     RTTI_METHOD(OnMounting);

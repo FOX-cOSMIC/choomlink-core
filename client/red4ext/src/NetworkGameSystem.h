@@ -8,7 +8,6 @@
 #include "RED4ext/Scripting/Stack.hpp"
 
 #include "PlayerActionTracker.h"
-#include "PlayerSync/InterpolationData.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -31,7 +30,19 @@ private:
     Red::Handle<Red::ink::ISystemRequestsHandler> m_systemRequestsHandler;
     bool m_gameRestored = false;
     std::map<uint64_t, RED4ext::ent::EntityID> m_networkedEntitiesLookup;
-    std::map<RED4ext::ent::EntityID, InterpolationData> m_interpolationData;
+
+    // Per-remote-puppet movement bookkeeping (locomotion sync). Each remote puppet gets an
+    // invisible proxy entity that we teleport to every network position; the puppet follows
+    // it via ONE long-lived AIFollowTargetCommand — the engine's native mechanism for
+    // following a moving target (gait adaptation, stop hysteresis included).
+    struct MovementState
+    {
+        RED4ext::ent::EntityID proxyId {};
+        bool proxyRequested = false;
+        bool followIssued = false;
+        RED4ext::Handle<RED4ext::AICommand> followCommand;
+    };
+    std::map<RED4ext::ent::EntityID, MovementState> m_movementState;
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
     float m_TimeSinceLastPlayerPositionSync;
 
@@ -43,7 +54,6 @@ private:
     bool ConnectToServer(const std::string& host, uint16_t port);
     static void ConnectionStatusChangedCallback(SteamNetConnectionStatusChangedCallback_t* pInfo);
     void OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue);
-    void InterpolatePuppets(float deltaTime);
     void SetEntityPosition(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
 
 protected:

@@ -42,6 +42,20 @@ struct TeleportEntity
     }
 };
 
+// Relays a serverbound PlayerActionTracked (jump, later swim/climb/...) to the other
+// clients. `action` mirrors the serverbound PlayerAction enum.
+struct EntityAction {
+    uint64_t networkedEntityId;
+    uint8_t action;
+    Vector3 worldTransform;
+
+    inline static void FillMessageFrame(MessageFrame& frame)
+    {
+        frame.message_type = eEntityAction;
+        frame.channel_id = 1; // TODO
+    }
+};
+
 struct EquipItemEntity {
     uint64_t networkedEntityId;
     uint64_t slot;

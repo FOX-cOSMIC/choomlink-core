@@ -23,21 +23,21 @@ void PlayerActionTracker::RecordPlayerAction(RED4ext::CName actionName, RED4ext:
         // think about mouse movements, at least mouse_x is important as yaw.
         // alternatively CameraMouseX.
     }
-    else if (name == "Jump" && actionType == RED4ext::game::input::ActionType::BUTTON_RELEASED)
-    {
-        const auto player = Cyberverse::Utils::GetPlayer();
-        const auto [X, Y, Z, W] = Cyberverse::Utils::Entity_GetWorldPosition(player);
+    // NOTE: Jump used to be tracked here via BUTTON_RELEASED, but that fires even when no jump
+    // happens (menus, blocked states). It now comes from the locomotion state machine instead
+    // (JumpEvents.OnEnter wrap -> TrackJump), fixing the upstream-noted false positives.
+}
 
-        PlayerActionTracked tracked = {};
-        tracked.action = eACTION_JUMP;
+void PlayerActionTracker::TrackJump()
+{
+    const auto player = Cyberverse::Utils::GetPlayer();
+    const auto [X, Y, Z, W] = Cyberverse::Utils::Entity_GetWorldPosition(player);
 
-        tracked.worldTransform = {};
-        tracked.worldTransform.x = X;
-        tracked.worldTransform.y = Y;
-        tracked.worldTransform.z = Z;
+    PlayerActionTracked tracked = {};
+    tracked.action = eACTION_JUMP;
+    tracked.worldTransform = { X, Y, Z };
 
-        Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(1, tracked);
-    }
+    Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(1, tracked);
 }
 
 void PlayerActionTracker::OnShoot(RED4ext::Handle<RED4ext::gameprojectileShootEvent> event)

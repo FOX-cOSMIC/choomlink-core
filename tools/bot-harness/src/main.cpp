@@ -33,6 +33,7 @@ struct Options
     Behavior::Pattern pattern = Behavior::Pattern::Circle;
     Vector3 center = { -2102.0f, 446.0f, 36.0f }; // verified Stage-A player position
     float hz = 10.0f;
+    float jumpEvery = 0.0f; // seconds between jump actions per bot; 0 = never
 };
 
 bool ParseArgs(const int argc, char** argv, Options& options)
@@ -101,11 +102,18 @@ bool ParseArgs(const int argc, char** argv, Options& options)
             if (!value) return false;
             options.hz = static_cast<float>(std::atof(value));
         }
+        else if (arg == "--jump-every")
+        {
+            const auto value = next();
+            if (!value) return false;
+            options.jumpEvery = static_cast<float>(std::atof(value));
+        }
         else
         {
             std::fprintf(stderr,
                          "usage: bot-harness [--server 127.0.0.1] [--port 1337] [--count 8]\n"
-                         "                   [--pattern circle|random] [--center x,y,z] [--hz 10]\n");
+                         "                   [--pattern circle|random] [--center x,y,z] [--hz 10]\n"
+                         "                   [--jump-every <seconds>]\n");
             return false;
         }
     }
@@ -169,6 +177,7 @@ int main(const int argc, char** argv)
     const auto sendInterval = 1.0f / options.hz;
     float sendAccumulator = 0.0f;
     float statsAccumulator = 0.0f;
+    float jumpAccumulator = 0.0f;
     auto lastTime = std::chrono::steady_clock::now();
 
     while (!g_stop)
@@ -193,21 +202,36 @@ int main(const int argc, char** argv)
             sendAccumulator = 0.0f;
         }
 
+        if (options.jumpEvery > 0.0f)
+        {
+            jumpAccumulator += dt;
+            if (jumpAccumulator >= options.jumpEvery)
+            {
+                jumpAccumulator = 0.0f;
+                for (const auto& bot : bots)
+                {
+                    bot->SendJump();
+                }
+            }
+        }
+
         statsAccumulator += dt;
         if (statsAccumulator >= 1.0f)
         {
             statsAccumulator = 0.0f;
 
             int running = 0, dead = 0;
-            uint64_t teleports = 0;
+            uint64_t teleports = 0, actions = 0;
             for (const auto& bot : bots)
             {
                 if (bot->GetState() == BotClient::State::Running) running++;
                 if (bot->GetState() == BotClient::State::Dead) dead++;
                 teleports += bot->ConsumeTeleportCount();
+                actions += bot->ConsumeActionCount();
             }
-            std::printf("stats: %d/%zu running, %d dead, %llu teleports received/s\n", running, bots.size(), dead,
-                        static_cast<unsigned long long>(teleports));
+            std::printf("stats: %d/%zu running, %d dead, %llu teleports, %llu actions received/s\n", running,
+                        bots.size(), dead, static_cast<unsigned long long>(teleports),
+                        static_cast<unsigned long long>(actions));
 
             if (dead == static_cast<int>(bots.size()))
             {

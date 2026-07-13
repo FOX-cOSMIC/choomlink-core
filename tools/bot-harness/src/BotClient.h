@@ -35,6 +35,7 @@ public:
     bool Connect(const SteamNetworkingIPAddr& address);
     void PollIncomingMessages();
     void SendTick(float dt); // behavior update + PlayerPositionUpdate while Running
+    void SendJump();         // PlayerActionTracked(jump) at the current position
     void Close(const char* reason);
 
     State GetState() const { return m_state; }
@@ -43,6 +44,12 @@ public:
     {
         const auto count = m_teleportsReceived;
         m_teleportsReceived = 0;
+        return count;
+    }
+    uint64_t ConsumeActionCount()
+    {
+        const auto count = m_actionsReceived;
+        m_actionsReceived = 0;
         return count;
     }
 
@@ -84,7 +91,9 @@ private:
     HSteamNetConnection m_conn = k_HSteamNetConnection_Invalid;
     State m_state = State::Connecting;
     Behavior m_behavior;
+    Pose m_lastPose {};
     uint64_t m_teleportsReceived = 0;
+    uint64_t m_actionsReceived = 0;
 
     static std::unordered_map<HSteamNetConnection, BotClient*> s_byConnection;
 };

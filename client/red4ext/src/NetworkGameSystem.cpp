@@ -21,6 +21,8 @@
 
 #include <zpp_bits.h>
 
+#include <cmath>
+
 bool NetworkGameSystem::Load()
 {
     if (SteamDatagramErrMsg errMsg; !GameNetworkingSockets_Init(nullptr, errMsg))
@@ -107,7 +109,6 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
 
     PollIncomingMessages();
     TrackPlayerPosition(frame_info.deltaTime);
-    InterpolatePuppets(frame_info.deltaTime);
 
     m_pInterface->RunCallbacks(); // This shall be called in a loop.
 }
@@ -353,35 +354,98 @@ void NetworkGameSystem::PollIncomingMessages()
                 break;
             }
 
-            const auto yawSource = Cyberverse::Utils::Quaternion_ToEulerAngles(Cyberverse::Utils::Entity_GetWorldOrientation(entity.value())).Yaw;
             const auto positionSource = Cyberverse::Utils::Entity_GetWorldPosition(entity.value());
 
             if (positionSource.X == 0.0 && positionSource.Y == 0.0 && positionSource.Z == 0.0)
             {
                 // TODO: let's pray that this doesn't have a side effect when players DO reside at (0, 0, 0)
-                // The first interpolation would go from (0, 0, 0) to target position, but that would despawn and destroy
-                // the entity, since it's too far away.
                 SDK->logger->Warn(PLUGIN, "Server Bug: Teleport Entity without the teleport flag for a fresh spawned entity");
                 SetEntityPosition(entityId, worldPosition, teleport.yaw);
                 break;
             }
 
-            SDK->logger->TraceF(PLUGIN, "New Interpolation Data (entity %llu): yaw %f -> %f, position: (%f, %f, %f) -> (%f, %f, %f)", teleport.networkedEntityId, yawSource, teleport.yaw, positionSource.X, positionSource.Y, positionSource.Z, teleport.targetPosition.x, teleport.targetPosition.y, teleport.targetPosition.z);
-
-            if (m_LastTeleportCommand.contains(entityId))
+            // Non-puppets (vehicles, items) have no AI locomotion — plain teleport, done.
+            bool handledAsNonPuppet = false;
+            Red::CallVirtual(this, "TeleportIfNotPuppet", handledAsNonPuppet, entity.value(), worldPosition, teleport.yaw);
+            if (handledAsNonPuppet)
             {
-                // TODO: Alternatively we could query the command and if it's still running just skipping enqueing a new comand
-                //  but that probably means more lags/teleports again, because the gap between teleports becomes larger.
-                //  but then, does stopping really change a thing? The best would be to _update_ the existing command,
-                //  but is that working? who knows!
-                const auto commandRef = m_LastTeleportCommand[entityId];
-                Red::CallVirtual(this, "StopAICommand", entity.value(), commandRef);
+                break;
             }
 
-            // TODO: This should probably be a map<id, list<data>>, so that a server that eagerly sends too much data doesn't increase interpolation delay
-            //  in contrast, we can just increase the time velocity of the interpolator
-            const auto interpolation_data = InterpolationData(Cyberverse::Utils::Vector4To3(positionSource), teleport.targetPosition, yawSource, teleport.yaw, 0.1f);
-            m_interpolationData[entityId] = interpolation_data;
+            // Locomotion sync (engine-native): the puppet follows an invisible proxy entity via
+            // ONE long-lived AIFollowTargetCommand (matchSpeed adapts walk/run/sprint natively);
+            // per network update we only teleport the proxy to the sender's latest position.
+            auto& moveState = m_movementState[entityId];
+
+            const auto lagX = teleport.targetPosition.x - positionSource.X;
+            const auto lagY = teleport.targetPosition.y - positionSource.Y;
+            const auto lagZ = teleport.targetPosition.z - positionSource.Z;
+            const auto puppetLag = std::sqrt(lagX * lagX + lagY * lagY + lagZ * lagZ);
+
+            if (!moveState.proxyRequested)
+            {
+                RED4ext::ent::EntityID proxyId = {};
+                Red::CallVirtual(this, "CreateMovementProxy", proxyId, worldPosition);
+                moveState.proxyId = proxyId;
+                moveState.proxyRequested = true;
+                break; // spawning is async; the follow command starts once the proxy resolves
+            }
+
+            const auto proxy = Cyberverse::Utils::GetDynamicEntity(moveState.proxyId);
+            if (!proxy.has_value())
+            {
+                break; // still spawning — retried on the next position update
+            }
+
+            Red::CallVirtual(this, "MoveProxy", proxy.value(), worldPosition, teleport.yaw);
+
+            if (puppetLag > 8.0f)
+            {
+                // Desync / spawn placement / vehicle exit: hard-teleport the puppet to catch up;
+                // the follow command keeps running and resumes from the new spot.
+                SDK->logger->TraceF(PLUGIN, "Entity %llu is %f m off target, teleport catch-up", teleport.networkedEntityId, puppetLag);
+                SetEntityPosition(entityId, worldPosition, teleport.yaw);
+                break;
+            }
+
+            if (!moveState.followIssued)
+            {
+                RED4ext::Handle<RED4ext::AICommand> commandRef;
+                Red::CallVirtual(this, "StartFollowingProxy", commandRef, entity.value(), proxy.value());
+                if (commandRef)
+                {
+                    moveState.followCommand = commandRef;
+                    moveState.followIssued = true;
+                }
+            }
+        }
+        break;
+
+        case eEntityAction:
+        {
+            EntityAction entity_action = {};
+            if (zpp::bits::failure(in(entity_action)))
+            {
+                SDK->logger->Error(PLUGIN, "Faulty packet: EntityAction");
+                pIncomingMsg->Release();
+                continue;
+            }
+
+            if (!m_networkedEntitiesLookup.contains(entity_action.networkedEntityId))
+            {
+                SDK->logger->WarnF(PLUGIN, "EntityAction for unknown networkedEntityId %llu", entity_action.networkedEntityId);
+                break;
+            }
+
+            const auto entityId = m_networkedEntitiesLookup[entity_action.networkedEntityId];
+            const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
+            if (!entity.has_value())
+            {
+                break;
+            }
+
+            // Unknown action values are ignored inside the redscript handler (forward compatibility).
+            Red::CallVirtual(this, "PuppetAction", entity.value(), static_cast<uint32_t>(entity_action.action));
         }
         break;
 
@@ -407,6 +471,15 @@ void NetworkGameSystem::PollIncomingMessages()
                 SDK->logger->Warn(PLUGIN, "Failed to destroy entity!");
             }
 
+            // The movement proxy is ours, not the server's — clean it up with its puppet.
+            if (const auto it = m_movementState.find(entityId); it != m_movementState.end())
+            {
+                if (it->second.proxyRequested)
+                {
+                    Red::CallVirtual(this, "DestroyTransientEntity", it->second.proxyId);
+                }
+                m_movementState.erase(it);
+            }
             m_networkedEntitiesLookup.erase(entityId);
         }
         break;
@@ -465,50 +538,3 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     this->EnqueueMessage(1, position_update);
 }
 
-void NetworkGameSystem::InterpolatePuppets(const float deltaTime)
-{
-    for (auto it = m_interpolationData.begin(); it != m_interpolationData.end();)
-    {
-        auto& entityId = it->first;
-        auto& interpolator = it->second;
-
-        const auto interpolationProgress = std::min(1.0f, interpolator.CalcInterpolationProgress(deltaTime));
-        const auto targetDestination = Cyberverse::Utils::LerpLocal(interpolator.positionSource, interpolator.positionTarget, interpolationProgress);
-
-        auto angleDirection1 = interpolator.rotationTarget - interpolator.rotationSource;
-        auto angleDirection2 = interpolator.rotationSource - interpolator.rotationTarget;
-
-        if (angleDirection1 < 0.0f)
-        {
-            angleDirection1 += 360.0f;
-        }
-
-        if (angleDirection2 < 0.0f)
-        {
-            angleDirection2 += 360.0f;
-        }
-
-        auto actualAngleDistance = 0.0f;
-        if (angleDirection1 < angleDirection2)
-        {
-            actualAngleDistance = angleDirection1;
-        } else
-        {
-            actualAngleDistance = -angleDirection2;
-        }
-
-        // TODO: Better interpolation here, e.g. if we go from 5 -> 355°, we should only do 10°, not 350.
-        const float targetYaw = interpolator.rotationSource + interpolationProgress * actualAngleDistance;
-        const auto targetDestinationVec4 = Cyberverse::Utils::Vector3To4(targetDestination); // TODO: Get rid of this function call
-        SDK->logger->TraceF(PLUGIN, "Interpolation Progress: %f, yaw: %f. dest (%f, %f, %f)", interpolationProgress, targetYaw, targetDestinationVec4.X, targetDestinationVec4.Y, targetDestinationVec4.Z);
-
-        SetEntityPosition(entityId, targetDestinationVec4, targetYaw);
-
-        if (interpolationProgress >= 1.0f)
-        {
-            it = m_interpolationData.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}

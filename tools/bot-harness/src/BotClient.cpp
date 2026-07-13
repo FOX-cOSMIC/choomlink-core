@@ -178,6 +178,18 @@ void BotClient::HandleMessage(const void* data, const size_t size)
     }
     break;
 
+    case eEntityAction:
+    {
+        EntityAction entityAction = {};
+        if (zpp::bits::failure(in(entityAction)))
+        {
+            std::fprintf(stderr, "[%s] faulty packet: EntityAction\n", m_name.c_str());
+            return;
+        }
+        m_actionsReceived++;
+    }
+    break;
+
     case eDestroyEntity:
     {
         DestroyEntity destroy = {};
@@ -204,9 +216,22 @@ void BotClient::SendTick(const float dt)
         return;
     }
 
-    const auto [position, yaw] = m_behavior.Tick(dt);
-    const PlayerPositionUpdate update = { position, yaw };
+    m_lastPose = m_behavior.Tick(dt);
+    const PlayerPositionUpdate update = { m_lastPose.position, m_lastPose.yaw };
     Send(update);
+}
+
+void BotClient::SendJump()
+{
+    if (m_state != State::Running)
+    {
+        return;
+    }
+
+    PlayerActionTracked action = {};
+    action.action = eACTION_JUMP;
+    action.worldTransform = m_lastPose.position;
+    Send(action);
 }
 
 void BotClient::Close(const char* reason)

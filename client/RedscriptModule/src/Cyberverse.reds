@@ -114,5 +114,10 @@ protected cb func OnShootTarget(eventData: ref<gameprojectileShootTargetEvent>) 
 //     GameInstance.GetNetworkGameSystem().playerActionTracker.OnHit(this, evt);
 // }
 
-// @wrapMethod(JumpEvents)
-// protected cb func OnEnter(stateContext: ref<StateContext>, scriptInterface: ref<StateGameScriptInterface>) -> Void {}
+// Fires when the locomotion state machine actually enters the jump state — unlike the Jump
+// button, this never false-positives (menus, blocked jumps).
+@wrapMethod(JumpEvents)
+protected func OnEnter(stateContext: ref<StateContext>, scriptInterface: ref<StateGameScriptInterface>) -> Void {
+    wrappedMethod(stateContext, scriptInterface);
+    GameInstance.GetNetworkGameSystem().playerActionTracker.TrackJump();
+}

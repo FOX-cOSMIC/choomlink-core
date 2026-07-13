@@ -7,4 +7,5 @@ public enum EMessageTypeClientbound: ushort
     TeleportEntity = 2,
     DestroyEntity = 3,
     EquipItemEntity = 4,
+    EntityAction = 5,
 }
