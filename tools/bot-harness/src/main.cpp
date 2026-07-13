@@ -85,9 +85,13 @@ bool ParseArgs(const int argc, char** argv, Options& options)
             {
                 options.pattern = Behavior::Pattern::Boundary;
             }
+            else if (std::strcmp(value, "static") == 0)
+            {
+                options.pattern = Behavior::Pattern::Static;
+            }
             else
             {
-                std::fprintf(stderr, "unknown pattern \"%s\" (circle|random|boundary)\n", value);
+                std::fprintf(stderr, "unknown pattern \"%s\" (circle|random|boundary|static)\n", value);
                 return false;
             }
         }
@@ -123,7 +127,7 @@ bool ParseArgs(const int argc, char** argv, Options& options)
         {
             std::fprintf(stderr,
                          "usage: bot-harness [--server 127.0.0.1] [--port 1337] [--count 8]\n"
-                         "                   [--pattern circle|random|boundary] [--center x,y,z] [--hz 10]\n"
+                         "                   [--pattern circle|random|boundary|static] [--center x,y,z] [--hz 10]\n"
                          "                   [--jump-every <seconds>] [--distance <m, boundary pattern>]\n");
             return false;
         }
@@ -175,6 +179,7 @@ int main(const int argc, char** argv)
 
     const char* patternName = options.pattern == Behavior::Pattern::Circle     ? "circle"
                               : options.pattern == Behavior::Pattern::Boundary ? "boundary"
+                              : options.pattern == Behavior::Pattern::Static   ? "static"
                                                                                : "random";
     std::printf("bot-harness: %d bot(s) -> %s, pattern %s, %.0f Hz, center (%.1f, %.1f, %.1f)\n", options.count,
                 connectionString, patternName, options.hz, options.center.x, options.center.y, options.center.z);

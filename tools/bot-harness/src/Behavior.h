@@ -21,6 +21,7 @@ public:
         Circle,
         Random,
         Boundary,
+        Static,
     };
 
     Behavior(const Pattern pattern, const Vector3 center, const int botIndex, const float boundaryDistance = 440.0f)
@@ -58,6 +59,8 @@ public:
             return TickCircle(dt);
         case Pattern::Boundary:
             return TickBoundary(dt);
+        case Pattern::Static:
+            return { m_position, std::fmod(m_heading * 57.29578f, 360.0f) };
         case Pattern::Random:
         default:
             return TickRandom(dt);
