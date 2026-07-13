@@ -47,6 +47,7 @@ public class PlayerPacketHandler
             var entity = server.EntityService.CreateEntity(PossiblePlayerNpcChoice[choice]);
             entity.WorldTransform = content.position; // Spawn the entity at the right spot already
             entity.NetworkIdOwner = player.ConnectionId;
+            player.PuppetEntity = entity;
                 
             // Since we only call the tracking for moved entities, force sync every entity to that player:
             _tracker!.InitialSpawnForPlayer(player);
@@ -210,14 +211,11 @@ public class PlayerPacketHandler
             worldTransform = content.worldTransform
         };
 
-        foreach (var player in _players!.ConnectedPlayers.Values)
+        // Interest-managed: only players currently tracking the sender's puppet get the action
+        // (a player never tracks their own entity, so no self-check needed).
+        foreach (var trackingConnectionId in _tracker!.GetPlayersTracking(senderEntity.NetworkedEntityId))
         {
-            if (player.ConnectionId == connectionId)
-            {
-                continue;
-            }
-
-            server.EnqueueMessage(EMessageTypeClientbound.EntityAction, player.ConnectionId, channelId, entityAction);
+            server.EnqueueMessage(EMessageTypeClientbound.EntityAction, trackingConnectionId, channelId, entityAction);
         }
     }
 
