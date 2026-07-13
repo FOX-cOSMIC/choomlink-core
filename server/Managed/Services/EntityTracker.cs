@@ -25,6 +25,11 @@ public class EntityTracker
     private readonly Dictionary<uint, HashSet<Entity>> _trackedEntities = new();
     private readonly Dictionary<ulong, HashSet<uint>> _trackers = new();
 
+    // Frequency falloff (Phase 2a): per-entity update counter + precomputed tier bounds.
+    private readonly Dictionary<ulong, ulong> _updateCounters = new();
+    private readonly float[] _falloffMaxDistSq;
+    private readonly int[] _falloffDivisors;
+
     private EntityVisibilityFilter? _visibilityFilter;
 
     public EntityTracker(IPacketSink sink, PlayerService players, SpatialGrid grid, InterestConfig config)
@@ -33,6 +38,20 @@ public class EntityTracker
         _players = players;
         _grid = grid;
         _config = config;
+        _falloffMaxDistSq = config.Falloff.Select(t => t.MaxDistance * t.MaxDistance).ToArray();
+        _falloffDivisors = config.Falloff.Select(t => t.Divisor).ToArray();
+    }
+
+    private int DivisorFor(float distSq)
+    {
+        for (var i = 0; i < _falloffMaxDistSq.Length; i++)
+        {
+            if (distSq <= _falloffMaxDistSq[i])
+            {
+                return _falloffDivisors[i];
+            }
+        }
+        return _falloffDivisors[^1];
     }
 
     public void SetEntityVisibilityFilter(EntityVisibilityFilter? filter)
@@ -48,6 +67,9 @@ public class EntityTracker
     public void UpdateTrackingOf(Entity entity)
     {
         _grid.Move(entity);
+
+        var counter = _updateCounters.TryGetValue(entity.NetworkedEntityId, out var c) ? c + 1 : 1;
+        _updateCounters[entity.NetworkedEntityId] = counter;
 
         // Enter side: players whose puppet is a grid candidate around the moved entity.
         foreach (var candidate in _grid.QueryCandidates(entity.WorldTransform, _config.EnterRadius))
@@ -84,6 +106,17 @@ public class EntityTracker
             };
             foreach (var connectionId in remaining)
             {
+                // Frequency falloff: far observers get every Nth update (spec Phase 2a).
+                if (_players.ConnectedPlayers.TryGetValue(connectionId, out var observer)
+                    && observer.PuppetEntity != null)
+                {
+                    var distSq = observer.PuppetEntity.WorldTransform.DistanceSquared(entity.WorldTransform);
+                    if (counter % (ulong)DivisorFor(distSq) != 0)
+                    {
+                        continue;
+                    }
+                }
+
                 _sink.EnqueueMessage(EMessageTypeClientbound.TeleportEntity, connectionId, 1, teleport);
             }
         }
@@ -221,6 +254,7 @@ public class EntityTracker
 
         _trackers.Remove(entity.NetworkedEntityId);
         _grid.Remove(entity);
+        _updateCounters.Remove(entity.NetworkedEntityId);
     }
 
     /// Cleans the disconnected player's own tracked set + reverse-index entries. The player's

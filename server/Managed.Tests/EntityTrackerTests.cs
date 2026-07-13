@@ -89,7 +89,9 @@ public class EntityTrackerTests
 
         Assert.Equal(0, _sink.CountFor(2, EMessageTypeClientbound.SpawnEntity));
         Assert.Equal(0, _sink.CountFor(2, EMessageTypeClientbound.DestroyEntity));
-        Assert.True(_sink.CountFor(2, EMessageTypeClientbound.TeleportEntity) >= 5); // still synced
+        // Falloff (Phase 2a): the band sits in the far tier (divisor 5), so only ~1 of these
+        // 5 updates produces a teleport — but the stream must keep flowing.
+        Assert.True(_sink.CountFor(2, EMessageTypeClientbound.TeleportEntity) >= 1); // still synced
     }
 
     [Fact]
@@ -204,6 +206,61 @@ public class EntityTrackerTests
         _tracker.SetEntityVisibilityFilter((_, _) => false);
         _tracker.UpdateTrackingOf(mover);
         Assert.Equal(0, _sink.CountFor(2, EMessageTypeClientbound.SpawnEntity));
+    }
+
+    private void Drive(Entity mover, int updates, float step = 0.5f)
+    {
+        for (var i = 0; i < updates; i++)
+        {
+            mover.WorldTransform = new Vector3 { x = mover.WorldTransform.x + step, y = mover.WorldTransform.y };
+            _tracker.UpdateTrackingOf(mover);
+        }
+    }
+
+    [Fact]
+    public void Falloff_NearObserver_GetsEveryUpdate()
+    {
+        var (_, mover) = AddPlayer(1, 0f, 0f);
+        AddPlayer(2, 50f, 0f);
+        _tracker.UpdateTrackingOf(mover);
+        _sink.Clear();
+        Drive(mover, 10);
+        Assert.Equal(10, _sink.CountFor(2, EMessageTypeClientbound.TeleportEntity));
+    }
+
+    [Fact]
+    public void Falloff_MidObserver_GetsRoughlyEveryThird()
+    {
+        var (_, mover) = AddPlayer(1, 0f, 0f);
+        AddPlayer(2, 150f, 0f);
+        _tracker.UpdateTrackingOf(mover);
+        _sink.Clear();
+        Drive(mover, 12);
+        Assert.Equal(4, _sink.CountFor(2, EMessageTypeClientbound.TeleportEntity));
+    }
+
+    [Fact]
+    public void Falloff_FarObserver_GetsEveryFifth()
+    {
+        var (_, mover) = AddPlayer(1, 0f, 0f);
+        AddPlayer(2, 300f, 0f);
+        _tracker.UpdateTrackingOf(mover);
+        _sink.Clear();
+        Drive(mover, 10);
+        Assert.Equal(2, _sink.CountFor(2, EMessageTypeClientbound.TeleportEntity));
+    }
+
+    [Fact]
+    public void Falloff_MixedObservers_SameStreamDifferentRates()
+    {
+        var (_, mover) = AddPlayer(1, 0f, 0f);
+        AddPlayer(2, 50f, 0f);
+        AddPlayer(3, 300f, 0f);
+        _tracker.UpdateTrackingOf(mover);
+        _sink.Clear();
+        Drive(mover, 10);
+        Assert.Equal(10, _sink.CountFor(2, EMessageTypeClientbound.TeleportEntity));
+        Assert.Equal(2, _sink.CountFor(3, EMessageTypeClientbound.TeleportEntity));
     }
 
     [Fact]
