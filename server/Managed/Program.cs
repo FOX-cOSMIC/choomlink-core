@@ -11,7 +11,8 @@ public class Program
     {
         InitLogging();
         LogManager.GetCurrentClassLogger().Info("Starting Cyberverse Server 0.0.1 (c) 2023-2025 MeFisto94");
-        var server = new GameServer(1337);
+        var config = ServerConfig.Load(Path.Combine(AppContext.BaseDirectory, "config.json"));
+        var server = new GameServer(1337, config);
         AddTypicalPacketHandlers(server);
         
         var quit = false;

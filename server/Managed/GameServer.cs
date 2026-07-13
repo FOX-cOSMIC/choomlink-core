@@ -7,7 +7,7 @@ using NLog;
 
 namespace Cyberverse.Server;
 
-public class GameServer: NativeGameServer
+public class GameServer: NativeGameServer, IPacketSink
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private readonly Dictionary<EMessageTypeServerbound, HandlePacket> _packetHandlers = new();
@@ -15,11 +15,14 @@ public class GameServer: NativeGameServer
     public readonly EntityService EntityService;
     public readonly EntityTracker EntityTracker;
     public readonly PlayerService PlayerService = new();
+    public readonly ServerConfig Config;
 
-    public GameServer(ushort listeningPort) : base(listeningPort)
+    public GameServer(ushort listeningPort, ServerConfig config) : base(listeningPort)
     {
-        EntityTracker = new EntityTracker(this);
+        Config = config;
         EntityService = new EntityService();
+        EntityTracker = new EntityTracker(this, PlayerService,
+            new SpatialGrid(config.Interest.CellSize), config.Interest);
     }
 
     public void AddPacketHandler(EMessageTypeServerbound messageType, HandlePacket packetHandler)
@@ -53,6 +56,7 @@ public class GameServer: NativeGameServer
                 EntityService.SpawnedEntities.Remove(playerEntity.NetworkedEntityId);
             }
 
+            EntityTracker.OnPlayerDisconnected(connectionId);
             PlayerService.ConnectedPlayers.Remove(connectionId);
         }
     }
