@@ -173,9 +173,11 @@ int main(const int argc, char** argv)
         return 2;
     }
 
+    const char* patternName = options.pattern == Behavior::Pattern::Circle     ? "circle"
+                              : options.pattern == Behavior::Pattern::Boundary ? "boundary"
+                                                                               : "random";
     std::printf("bot-harness: %d bot(s) -> %s, pattern %s, %.0f Hz, center (%.1f, %.1f, %.1f)\n", options.count,
-                connectionString, options.pattern == Behavior::Pattern::Circle ? "circle" : "random", options.hz,
-                options.center.x, options.center.y, options.center.z);
+                connectionString, patternName, options.hz, options.center.x, options.center.y, options.center.z);
 
     std::vector<std::unique_ptr<BotClient>> bots;
     for (int i = 0; i < options.count; i++)
