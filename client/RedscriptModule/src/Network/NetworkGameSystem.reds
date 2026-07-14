@@ -89,6 +89,29 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Applies an AnimFeature through the game's own helper (AnimationControllerComponent.
+    // ApplyFeature) — the exact code path the base game uses for hit reactions, cover
+    // stances and equips. The feature instance itself is built natively in C++ (the
+    // locomotion feature classes are not script-exposed).
+    public func ApplyAnimFeature(entity: ref<Entity>, inputName: CName, feature: ref<AnimFeature>) {
+        let go = entity as GameObject;
+        if !IsDefined(go) {
+            return;
+        }
+        AnimationControllerComponent.ApplyFeature(go, inputName, feature);
+    }
+
+    // Fires a named external anim event on the puppet's graph (the trigger half of the
+    // game's feature+event pattern: ApplyFeature carries the data, PushEvent fires the
+    // state transition — the graph's transitions require both, composed simultaneously).
+    public func PushPuppetEvent(entity: ref<Entity>, eventName: CName) {
+        let go = entity as GameObject;
+        if !IsDefined(go) {
+            return;
+        }
+        AnimationControllerComponent.PushEvent(go, eventName);
+    }
+
     // Kinematic per-frame move for remote puppets (AI-free locomotion, phase 4b): the C++
     // interpolation calls this every frame with the next position on the network path.
     public func KinematicMove(entity: ref<Entity>, position: Vector4, yaw: Float) {

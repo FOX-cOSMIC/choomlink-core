@@ -15,6 +15,7 @@
 #include <steam/steamnetworkingsockets.h>
 
 #include "RED4ext/Scripting/Natives/Generated/anim/AnimFeature_Crowd.hpp"
+#include "RED4ext/Scripting/Natives/Generated/anim/AnimFeature_HitReactionsData.hpp"
 #include "RED4ext/Scripting/Natives/Generated/anim/AnimFeature_CrowdLocomotion.hpp"
 #include "RED4ext/Scripting/Natives/Generated/anim/AnimFeature_Locomotion.hpp"
 #include "RED4ext/Scripting/Natives/Generated/anim/Locomotion_Style.hpp"
@@ -227,8 +228,49 @@ void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId,
 
 void NetworkGameSystem::UpdatePuppetInterpolation(const float deltaTime)
 {
+    // DISCRIMINATOR PROBE (temporary): every 2.5 s queue a "hit" feature (hitType=1) on every
+    // tracked puppet. The graph reacts to hit.hitType==1 with a flinch (12 transitions test it).
+    // Visible flinch => our AnimInputSetterAnimFeature events DO reach the graph's feature
+    // storage, and the locomotion failure is a writer race / state gating. No flinch => the
+    // event route itself never lands and we debug that instead.
+#define CHOOMLINK_HIT_PROBE 1
+#if CHOOMLINK_HIT_PROBE
+    static float s_hitProbeTimer = 0.0f;
+    s_hitProbeTimer += deltaTime;
+    const bool fireHitProbe = s_hitProbeTimer >= 2.5f;
+    if (fireHitProbe)
+    {
+        s_hitProbeTimer = 0.0f;
+    }
+#endif
+
     for (auto& [entityId, state] : m_movementState)
     {
+#if CHOOMLINK_HIT_PROBE
+        if (fireHitProbe)
+        {
+            if (const auto probeEntity = Cyberverse::Utils::GetDynamicEntity(entityId); probeEntity.has_value())
+            {
+                auto hitFeature = Red::MakeScriptedHandle<RED4ext::anim::AnimFeature_HitReactionsData>("animAnimFeature_HitReactionsData");
+                if (hitFeature)
+                {
+                    hitFeature->hitType = 3; // anim::HitReactionType::Stagger — unmissable in stills
+                    hitFeature->hitIntensity = 2;
+                    hitFeature->hitBodyPart = 1;
+                    hitFeature->hitDirection = 0;
+                    hitFeature->hitSource = 1;
+                    const RED4ext::Handle<RED4ext::anim::AnimFeature> hitBase = hitFeature;
+                    if (!Red::CallVirtual(this, "ApplyAnimFeature", probeEntity.value(), RED4ext::CName("hit"), hitBase))
+                    {
+                        SDK->logger->Warn(PLUGIN, "hit probe: ApplyAnimFeature call failed");
+                    }
+                    // Feature alone is inert data — the graph transition also needs the
+                    // external "hit" event (16 ExternalEvent conditions in humanoid.animgraph).
+                    Red::CallVirtual(this, "PushPuppetEvent", probeEntity.value(), RED4ext::CName("hit"));
+                }
+            }
+        }
+#endif
         state.timeSinceUpdate += deltaTime;
         if (!state.hasTarget)
         {
@@ -307,14 +349,8 @@ void NetworkGameSystem::DriveLocomotionFeed(const Red::Handle<Red::Entity>& enti
         locoFeature->action = action;
         locoFeature->style = style;
         locoFeature->speedProgress = moving ? 1.0f : 0.0f;
-        auto locoEvt = Red::MakeScriptedHandle<RED4ext::ent::AnimInputSetterAnimFeature>("entAnimInputSetterAnimFeature");
-        if (locoEvt)
-        {
-            locoEvt->key = "locomotion";
-            locoEvt->delay = 0.0f;
-            locoEvt->value = locoFeature;
-            Red::CallVirtual(entity, "QueueEvent", locoEvt);
-        }
+        const RED4ext::Handle<RED4ext::anim::AnimFeature> locoBase = locoFeature;
+        Red::CallVirtual(this, "ApplyAnimFeature", entity, RED4ext::CName("locomotion"), locoBase);
     }
 
     auto crowdFeature = Red::MakeScriptedHandle<RED4ext::anim::AnimFeature_CrowdLocomotion>("animAnimFeature_CrowdLocomotion");
@@ -322,14 +358,8 @@ void NetworkGameSystem::DriveLocomotionFeed(const Red::Handle<Red::Entity>& enti
     {
         crowdFeature->speed = state.speed;
         crowdFeature->isCrowd = true;
-        auto crowdEvt = Red::MakeScriptedHandle<RED4ext::ent::AnimInputSetterAnimFeature>("entAnimInputSetterAnimFeature");
-        if (crowdEvt)
-        {
-            crowdEvt->key = "crowd_locomotion";
-            crowdEvt->delay = 0.0f;
-            crowdEvt->value = crowdFeature;
-            Red::CallVirtual(entity, "QueueEvent", crowdEvt);
-        }
+        const RED4ext::Handle<RED4ext::anim::AnimFeature> crowdBase = crowdFeature;
+        Red::CallVirtual(this, "ApplyAnimFeature", entity, RED4ext::CName("crowd_locomotion"), crowdBase);
     }
 
     // The graph's crowd-branch state gates test crowdAnimFeature.locomotionState — and for a
@@ -341,14 +371,8 @@ void NetworkGameSystem::DriveLocomotionFeed(const Red::Handle<Red::Entity>& enti
         crowdStateFeature->locomotionState = moving ? 1 : 0;
         crowdStateFeature->speedType = moving ? 1 : 0;
         crowdStateFeature->animScale = 1.0f;
-        auto crowdStateEvt = Red::MakeScriptedHandle<RED4ext::ent::AnimInputSetterAnimFeature>("entAnimInputSetterAnimFeature");
-        if (crowdStateEvt)
-        {
-            crowdStateEvt->key = "crowdAnimFeature";
-            crowdStateEvt->delay = 0.0f;
-            crowdStateEvt->value = crowdStateFeature;
-            Red::CallVirtual(entity, "QueueEvent", crowdStateEvt);
-        }
+        const RED4ext::Handle<RED4ext::anim::AnimFeature> crowdStateBase = crowdStateFeature;
+        Red::CallVirtual(this, "ApplyAnimFeature", entity, RED4ext::CName("crowdAnimFeature"), crowdStateBase);
     }
 }
 
